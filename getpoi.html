@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>商家信息查询</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/3.1.9-1/crypto-js.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 20px auto;
+            padding: 20px;
+        }
+
+        h1 {
+            text-align: center;
+        }
+
+        .input-group {
+            margin: 10px 0;
+        }
+
+        .input-group label {
+            display: block;
+            margin-bottom: 5px;
+        }
+
+        .input-group input {
+            width: 100%;
+            padding: 8px;
+            box-sizing: border-box;
+        }
+
+        #result {
+            margin-top: 20px;
+        }
+
+        .poi {
+            margin: 10px 0;
+            padding: 10px;
+            border: 1px solid #ddd;
+        }
+
+        .button-group {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 20px;
+        }
+
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+
+<body>
+
+    <h1>商家信息查询</h1>
+
+    <div class="input-group">
+        <label for="keywords">关键词：</label>
+        <input type="text" id="keywords" placeholder="请输入关键词" value="海参">
+    </div>
+
+    <div class="input-group">
+        <label for="city">城市：</label>
+        <input type="text" id="city" placeholder="请输入城市" value="北京">
+    </div>
+
+    <div class="button-group">
+        <button onclick="fetchAllPOI()">获取商家信息</button>
+        <button onclick="exportToExcel()">导出为Excel</button>
+    </div>
+
+    <div id="result"></div>
+
+    <script>
+        const MAX_REQUESTS_PER_DAY = 80; // 每天最大请求次数
+        const STORAGE_KEY = 'request_tracker'; // 存储请求计数的键名
+        let poiData = []; // 保存商家信息
+        const pageSize = 25; // 每页最大条数为25
+        let city = "";
+        // 使用 crypto-js 生成 MD5 签名
+        function generateSignature(params, secret) {
+            const sortedParams = Object.keys(params).sort().map(key => `${key}=${params[key]}`).join('&');
+            const stringToSign = sortedParams + secret;
+            return CryptoJS.MD5(stringToSign).toString();
+        }
+        // 检查和更新请求计数
+        function checkAndUpdateRequestCount() {
+            const tracker = JSON.parse(localStorage.getItem(STORAGE_KEY)) || {};
+            const today = new Date().toISOString().split('T')[0]; // 获取当前日期（格式：YYYY-MM-DD）
+            if (tracker.date !== today) {
+                // 如果日期不匹配，重置计数器
+                tracker.date = today;
+                tracker.count = 0;
+            }
+            if (tracker.count >= MAX_REQUESTS_PER_DAY) {
+                return false; // 阻止后续请求
+            }
+            tracker.count++; // 增加计数
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(tracker)); // 保存到 localStorage
+            return true; // 允许继续请求
+        }
+        async function fetchAllPOI() {
+            const keywords = document.getElementById('keywords').value;
+            city = document.getElementById('city').value;
+            poiData = []; // 清空之前的数据
+            let page = 1;
+            let hasMore = true;
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = ''; // 清空结果区域
+            const key = '803a43d886d76a651d855f8812185d5b'; // 请替换为你的API密钥
+            while (hasMore) {  // 检查请求次数限制
+                if (!checkAndUpdateRequestCount()) {
+                    alert(`今天的请求次数已达到限制次数。请明天再试！`);
+                    break;
+                }
+                const params = {
+                    key: key,
+                    keywords: keywords,
+                    city: city,
+                    citylimit: true,
+                    offset: pageSize,
+                    page: page,
+                };
+                const sig = generateSignature(params, "bde48136d602ce74a470769906352b56");
+                const url = `https://restapi.amap.com/v3/place/text?${new URLSearchParams(params)}&sig=${sig}`;
+                try {
+                    const response = await fetch(url);
+                    const data = await response.json();
+                    if (data.status === '1' && data.pois.length > 0) {
+                        poiData = poiData.concat(data.pois);
+                        displayResults(data.pois);
+
+                        if (data.pois.length < pageSize) {
+                            hasMore = false; // 最后一页
+                        } else {
+                            page++;
+                            await delay(1000); // 添加1秒延迟
+                        }
+                    } else {
+                        hasMore = false;
+                        alert(`查询完成：${data.info || '无更多数据'}`);
+                    }
+                } catch (error) {
+                    console.error('请求出错：', error);
+                    alert('请求出错，请检查网络或API密钥。');
+                    hasMore = false;
+                }
+            }
+        }
+
+        // 显示结果到页面
+        function displayResults(pois) {
+            const resultDiv = document.getElementById('result');
+            pois.forEach(poi => {
+                const poiDiv = document.createElement('div');
+                poiDiv.classList.add('poi');
+                poiDiv.innerHTML = `
+                <strong>名称：</strong>${poi.name}<br>
+                <strong>地址：</strong>${poi.pname}${poi.cityname}${poi.adname}${poi.address}<br>
+                <strong>电话：</strong>${poi.tel || '无'}<br>
+                <strong>类型：</strong>${poi.type}<br>
+                <strong>经纬度：</strong>${poi.location}
+            `;
+                resultDiv.appendChild(poiDiv);
+            });
+        }
+
+        // 延迟函数
+        function delay(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
+        // 导出数据到 Excel
+        function exportToExcel() {
+            if (poiData.length === 0) {
+                alert('没有可导出的数据');
+                return;
+            }
+
+            city = city || document.getElementById('city').value;
+            const dataForExport = poiData.map(poi => ({
+                名称: poi.name,
+                地址: `${poi.pname}${poi.cityname}${poi.adname}${poi.address}`,
+                电话: poi.tel || '无',
+                类型: poi.type,
+                经纬度: poi.location
+            }));
+
+            const worksheet = XLSX.utils.json_to_sheet(dataForExport);
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, '商家信息');
+
+            XLSX.writeFile(workbook, city + '商家信息.xlsx');
+        }
+    </script>
+
+</body>
+
+</html>
